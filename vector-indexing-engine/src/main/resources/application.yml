@@ -1,0 +1,10 @@
+
+spring:
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY}
+  vectorstore:
+    chroma:
+      collection-name: repo-code
+      initialize-schema: true
+      base-url: http://localhost:8000
