@@ -5,7 +5,7 @@ public class VectorConfig {
     public VectorIndex vectorIndex(EmbeddingModel model) throws Exception {
         return new SimpleFileVectorStore(
                 model,
-                Path.of("data/vectors.json")
+                Path.of("data")
         );
     }
 }
