@@ -23,45 +23,6 @@ public class SimpleCodeVectorStore implements CodeVectorStore {
     @Override
     public void upsert(CodeChunk chunk) {
 
-        Document document = new Document(
-                chunk.content(),
-                enrichMetadata(chunk)
-        );
-
-        vectorStore.add(List.of(document));
-    }
-
-    @Override
-    public List<CodeChunk> search(String query, int k, Map<String, Object> filter) {
-
-        SearchRequest request = SearchRequest.query(query)
-                .withTopK(k);
-
-        // SimpleVectorStore supports metadata filtering via predicate
-        if (filter != null && !filter.isEmpty()) {
-            request = request.withFilterExpression(
-                    metadata -> filter.entrySet().stream()
-                            .allMatch(e ->
-                                    e.getValue().equals(metadata.get(e.getKey()))
-                            )
-            );
-        }
-
-        return vectorStore.similaritySearch(request)
-                .stream()
-                .map(this::toCodeChunk)
-                .collect(Collectors.toList());
-    }
-
-    private CodeChunk toCodeChunk(Document doc) {
-        return new CodeChunk(
-                (String) doc.getMetadata().get("id"),
-                doc.getContent(),
-                doc.getMetadata()
-        );
-    }
-
-    private Map<String, Object> enrichMetadata(CodeChunk chunk) {
         Map<String, Object> metadata =
                 chunk.metadata() == null
                         ? new java.util.HashMap<>()
@@ -69,6 +30,47 @@ public class SimpleCodeVectorStore implements CodeVectorStore {
 
         metadata.put("id", chunk.id());
 
-        return metadata;
+        Document document = new Document(chunk.content(), metadata);
+
+        vectorStore.add(List.of(document));
+    }
+
+    @Override
+    public List<CodeChunk> search(String query, int k, Map<String, Object> filter) {
+
+        // ✅ Correct way to build SearchRequest
+        SearchRequest request = SearchRequest.builder()
+                .query(query)
+                .topK(k)
+                .build();
+
+        return vectorStore.similaritySearch(request)
+                .stream()
+                // ✅ manual filtering (SimpleVectorStore limitation)
+                .filter(doc -> matchesFilter(doc.getMetadata(), filter))
+                .map(this::toCodeChunk)
+                .collect(Collectors.toList());
+    }
+
+    private boolean matchesFilter(
+            Map<String, Object> metadata,
+            Map<String, Object> filter
+    ) {
+        if (filter == null || filter.isEmpty()) {
+            return true;
+        }
+
+        return filter.entrySet().stream()
+                .allMatch(e ->
+                        e.getValue().equals(metadata.get(e.getKey()))
+                );
+    }
+
+    private CodeChunk toCodeChunk(Document doc) {
+        return new CodeChunk(
+                (String) doc.getMetadata().get("id"),
+                doc.getText(),              // ✅ correct method
+                doc.getMetadata()
+        );
     }
 }
