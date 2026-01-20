@@ -81,7 +81,7 @@ proxy:
   port: 8080
 
 
-  package com.example.security;
+ package com.example.security;
 
 import org.bouncycastle.asn1.pkcs.PrivateKeyInfo;
 import org.bouncycastle.cert.X509CertificateHolder;
@@ -91,6 +91,7 @@ import org.bouncycastle.cert.jcajce.JcaX509CertificateConverter;
 
 import java.io.FileReader;
 import java.nio.file.Path;
+import java.security.KeyStore;
 import java.security.PrivateKey;
 import java.security.cert.X509Certificate;
 
@@ -98,6 +99,9 @@ public final class PemLoader {
 
     private PemLoader() {}
 
+    /**
+     * Load certificate + private key from a single PEM file
+     */
     public static LoadedPem load(Path pemPath) throws Exception {
 
         PrivateKey privateKey = null;
@@ -107,30 +111,115 @@ public final class PemLoader {
             Object obj;
             while ((obj = parser.readObject()) != null) {
 
-                if (obj instanceof PrivateKeyInfo pk) {
-                    privateKey = new JcaPEMKeyConverter().getPrivateKey(pk);
+                if (obj instanceof PrivateKeyInfo pkInfo) {
+                    privateKey = new JcaPEMKeyConverter()
+                            .getPrivateKey(pkInfo);
                 }
 
-                if (obj instanceof X509CertificateHolder cert) {
+                if (obj instanceof X509CertificateHolder certHolder) {
                     certificate = new JcaX509CertificateConverter()
-                            .getCertificate(cert);
+                            .getCertificate(certHolder);
                 }
             }
         }
 
         if (privateKey == null || certificate == null) {
             throw new IllegalStateException(
-                    "PEM must contain both CERTIFICATE and PRIVATE KEY"
+                    "PEM file must contain BOTH a private key and a certificate"
             );
         }
 
         return new LoadedPem(privateKey, certificate);
     }
 
+    /**
+     * Load PEM into a KeyStore (for proxy mTLS)
+     */
+    public static KeyStore loadKeyStore(Path pemPath) throws Exception {
+
+        LoadedPem pem = load(pemPath);
+
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        keyStore.load(null);
+
+        keyStore.setKeyEntry(
+                "client",
+                pem.privateKey(),
+                null,
+                new java.security.cert.Certificate[]{pem.certificate()}
+        );
+
+        return keyStore;
+    }
+
+    /**
+     * Holder for cert + key
+     */
     public record LoadedPem(
             PrivateKey privateKey,
             X509Certificate certificate
     ) {}
+}
+
+
+package com.example.config;
+
+import com.example.security.PemLoader;
+import org.apache.hc.client5.http.classic.HttpClient;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
+import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
+import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.ssl.SSLContexts;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+import javax.net.ssl.SSLContext;
+import java.nio.file.Path;
+
+@Configuration
+public class ProxyHttpClientConfig {
+
+    @Value("${proxy.host}")
+    private String proxyHost;
+
+    @Value("${proxy.port}")
+    private int proxyPort;
+
+    @Value("${azure.cert-pem}")
+    private String pemPath;
+
+    @Bean
+    public HttpClient httpClient() throws Exception {
+
+        // Load cert + key for mTLS (proxy)
+        var keyStore = PemLoader.loadKeyStore(Path.of(pemPath));
+
+        SSLContext sslContext = SSLContexts.custom()
+                .loadKeyMaterial(keyStore, null)
+                .build();
+
+        var tlsStrategy = ClientTlsStrategyBuilder.create()
+                .setSslContext(sslContext)
+                .build();
+
+        PoolingHttpClientConnectionManager connectionManager =
+                PoolingHttpClientConnectionManagerBuilder.create()
+                        .setTlsStrategy(tlsStrategy)
+                        .build();
+
+        return HttpClients.custom()
+                .setConnectionManager(connectionManager)
+                .setRoutePlanner(
+                        new DefaultProxyRoutePlanner(
+                                new HttpHost(proxyHost, proxyPort)
+                        )
+                )
+                .build();
+    }
 }
 
 
