@@ -170,7 +170,8 @@ import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
-import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactory;
+import org.apache.hc.client5.http.ssl.SSLConnectionSocketFactoryBuilder;
 import org.apache.hc.core5.http.HttpHost;
 import org.apache.hc.core5.ssl.SSLContexts;
 import org.springframework.beans.factory.annotation.Value;
@@ -195,20 +196,21 @@ public class ProxyHttpClientConfig {
     @Bean
     public HttpClient httpClient() throws Exception {
 
-        // Load cert + key for mTLS (proxy)
+        // Load client cert + key for proxy mTLS
         var keyStore = PemLoader.loadKeyStore(Path.of(pemPath));
 
         SSLContext sslContext = SSLContexts.custom()
                 .loadKeyMaterial(keyStore, null)
                 .build();
 
-        var tlsStrategy = ClientTlsStrategyBuilder.create()
-                .setSslContext(sslContext)
-                .build();
+        SSLConnectionSocketFactory sslSocketFactory =
+                SSLConnectionSocketFactoryBuilder.create()
+                        .setSslContext(sslContext)
+                        .build();
 
         PoolingHttpClientConnectionManager connectionManager =
                 PoolingHttpClientConnectionManagerBuilder.create()
-                        .setTlsStrategy(tlsStrategy)
+                        .setSSLSocketFactory(sslSocketFactory) // ✅ THIS IS THE KEY LINE
                         .build();
 
         return HttpClients.custom()
@@ -221,7 +223,6 @@ public class ProxyHttpClientConfig {
                 .build();
     }
 }
-
 
 
 package com.example.config;
