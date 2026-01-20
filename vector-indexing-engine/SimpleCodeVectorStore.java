@@ -2,11 +2,13 @@ package com.example.vector.impl;
 
 import com.example.vector.CodeVectorStore;
 import com.example.vector.domain.CodeChunk;
+import com.example.vector.domain.Kind;
 import org.springframework.ai.document.Document;
 import org.springframework.ai.vectorstore.SearchRequest;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.stereotype.Component;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -20,25 +22,37 @@ public class SimpleCodeVectorStore implements CodeVectorStore {
         this.vectorStore = vectorStore;
     }
 
+    /**
+     * Insert (append) a CodeChunk into the vector store.
+     * NOTE: SimpleVectorStore does NOT support true upsert.
+     */
     @Override
     public void upsert(CodeChunk chunk) {
 
-        Map<String, Object> metadata =
-                chunk.metadata() == null
-                        ? new java.util.HashMap<>()
-                        : new java.util.HashMap<>(chunk.metadata());
+        Map<String, Object> metadata = new HashMap<>();
 
-        metadata.put("id", chunk.id());
+        if (chunk.metadata() != null) {
+            metadata.putAll(chunk.metadata());
+        }
 
-        Document document = new Document(chunk.content(), metadata);
+        metadata.put("symbol", chunk.symbol());
+        metadata.put("kind", chunk.kind().name());
+        metadata.put("hash", chunk.hash());
+
+        Document document = new Document(
+                chunk.content(),   // vectorized text
+                metadata
+        );
 
         vectorStore.add(List.of(document));
     }
 
+    /**
+     * Semantic similarity search with post-filtering.
+     */
     @Override
     public List<CodeChunk> search(String query, int k, Map<String, Object> filter) {
 
-        // ✅ Correct way to build SearchRequest
         SearchRequest request = SearchRequest.builder()
                 .query(query)
                 .topK(k)
@@ -46,11 +60,14 @@ public class SimpleCodeVectorStore implements CodeVectorStore {
 
         return vectorStore.similaritySearch(request)
                 .stream()
-                // ✅ manual filtering (SimpleVectorStore limitation)
                 .filter(doc -> matchesFilter(doc.getMetadata(), filter))
                 .map(this::toCodeChunk)
                 .collect(Collectors.toList());
     }
+
+    /* ----------------------------------------------------- */
+    /* ----------------- Helper methods -------------------- */
+    /* ----------------------------------------------------- */
 
     private boolean matchesFilter(
             Map<String, Object> metadata,
@@ -67,10 +84,15 @@ public class SimpleCodeVectorStore implements CodeVectorStore {
     }
 
     private CodeChunk toCodeChunk(Document doc) {
+
+        Map<String, Object> metadata = doc.getMetadata();
+
         return new CodeChunk(
-                (String) doc.getMetadata().get("id"),
-                doc.getText(),              // ✅ correct method
-                doc.getMetadata()
+                (String) metadata.get("symbol"),
+                Kind.valueOf((String) metadata.get("kind")),
+                doc.getText(),          // ✅ correct Spring AI API
+                metadata,
+                (String) metadata.get("hash")
         );
     }
 }
