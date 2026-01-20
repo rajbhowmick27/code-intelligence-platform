@@ -177,80 +177,106 @@ public class AzureAdAuthConfig {
 
 package com.example.config;
 
-import com.azure.core.credential.TokenCredential;
 import org.apache.hc.client5.http.classic.HttpClient;
-import org.springframework.ai.azure.openai.AzureOpenAiApi;
+import org.apache.hc.client5.http.impl.classic.HttpClients;
+import org.apache.hc.client5.http.impl.routing.DefaultProxyRoutePlanner;
+import org.apache.hc.client5.http.ssl.ClientTlsStrategyBuilder;
+import org.apache.hc.core5.http.HttpHost;
+import org.apache.hc.core5.ssl.SSLContexts;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import javax.net.ssl.SSLContext;
+import java.nio.file.Path;
 
 @Configuration
-public class AzureOpenAiConfig {
+public class ProxyHttpClientConfig {
+
+    @Value("${proxy.host}")
+    private String proxyHost;
+
+    @Value("${proxy.port}")
+    private int proxyPort;
+
+    @Value("${azure.cert-pem}")
+    private String pemPath;
 
     @Bean
-    public AzureOpenAiApi azureOpenAiApi(
-            TokenCredential credential,
-            HttpClient proxyHttpClient
-    ) {
-        return new AzureOpenAiApi(
-                AzureOpenAiApi.builder()
-                        .credential(credential)
-                        .httpClient(proxyHttpClient)
-                        .build()
-        );
+    public HttpClient httpClient() throws Exception {
+
+        var keyStore = com.example.security.PemLoader
+                .loadKeyStore(Path.of(pemPath));
+
+        SSLContext sslContext = SSLContexts.custom()
+                .loadKeyMaterial(keyStore, null)
+                .build();
+
+        return HttpClients.custom()
+                .setRoutePlanner(
+                        new DefaultProxyRoutePlanner(
+                                new HttpHost(proxyHost, proxyPort)
+                        )
+                )
+                .setTlsStrategy(
+                        ClientTlsStrategyBuilder.create()
+                                .setSslContext(sslContext)
+                                .build()
+                )
+                .build();
     }
 }
-
-
-package com.example.config;
-
-import org.springframework.ai.azure.openai.AzureOpenAiEmbeddingModel;
-import org.springframework.ai.azure.openai.AzureOpenAiEmbeddingOptions;
-import org.springframework.ai.embedding.EmbeddingModel;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 
 @Configuration
 public class EmbeddingConfig {
 
     @Bean
-    public EmbeddingModel embeddingModel(AzureOpenAiApi api) {
-        return new AzureOpenAiEmbeddingModel(
-                api,
-                AzureOpenAiEmbeddingOptions.builder()
-                        .withDeploymentName("text-embedding-3-large")
-                        .build()
-        );
+    public EmbeddingModel embeddingModel(AzureOpenAiEmbeddingModel model) {
+        return model;
     }
 }
 
+
+
+
+package com.example.config;
 
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.vectorstore.SimpleVectorStore;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.annotation.Value;
 
+import jakarta.annotation.PreDestroy;
 import java.io.File;
 
 @Configuration
 public class VectorStoreConfig {
 
-    private static final File STORE_FILE = new File("vector-store.json");
+    @Value("${vectorstore.file}")
+    private String vectorStoreFile;
+
+    private SimpleVectorStore store;
 
     @Bean
     public SimpleVectorStore vectorStore(EmbeddingModel embeddingModel) {
 
-        SimpleVectorStore store = new SimpleVectorStore(embeddingModel);
+        store = new SimpleVectorStore(embeddingModel);
 
-        if (STORE_FILE.exists()) {
-            store.load(STORE_FILE);
+        File file = new File(vectorStoreFile);
+        if (file.exists()) {
+            store.load(file);
         }
 
         return store;
     }
 
-    @Bean
-    public Runnable shutdownHook(SimpleVectorStore store) {
-        return () -> store.save(STORE_FILE);
+    @PreDestroy
+    public void persist() {
+        if (store != null) {
+            store.save(new File(vectorStoreFile));
+        }
     }
 }
+
 
